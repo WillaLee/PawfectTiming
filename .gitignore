@@ -1,0 +1,11 @@
+.vs/
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+
+*.VC.db
+*.VC.opendb
+*.suo
+*.user
+*.userprefs

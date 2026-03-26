@@ -1,34 +1,80 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
-
 #include "DogTrainingComponent.h"
 
-// Sets default values for this component's properties
 UDogTrainingComponent::UDogTrainingComponent()
 {
-	// Set this component to be initialized when the game starts, and to be ticked every frame.  You can turn these features
-	// off to improve performance if you don't need them.
-	PrimaryComponentTick.bCanEverTick = true;
-
-	// ...
+	PrimaryComponentTick.bCanEverTick = false;
 }
 
-
-// Called when the game starts
 void UDogTrainingComponent::BeginPlay()
 {
 	Super::BeginPlay();
-
-	// ...
-	
+	Proficiency = FMath::Clamp(Proficiency, 0, 100);
+	bLevelComplete = Proficiency >= 100;
+	bHasBroadcastLevelCompleted = bLevelComplete;
+	RefreshTrainingWindow();
 }
 
-
-// Called every frame
-void UDogTrainingComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+void UDogTrainingComponent::SetCue(ECueType NewCue)
 {
-	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	CurrentCue = NewCue;
+	RefreshTrainingWindow();
+}
 
-	// ...
+bool UDogTrainingComponent::OnClickerPressed()
+{
+	RefreshTrainingWindow();
+
+	const bool bWasLevelComplete = bLevelComplete;
+	const bool bWasSuccess = CurrentCue == TargetBehavior && bInCorrectWindow;
+
+	if (bWasSuccess)
+	{
+		Proficiency = FMath::Min(Proficiency + 10, 100);
+	}
+	else
+	{
+		Proficiency = FMath::Max(Proficiency - 2, 0);
+	}
+
+	bLevelComplete = Proficiency >= 100;
+	OnTrainingResult.Broadcast(bWasSuccess);
+
+	if (!bWasLevelComplete && bLevelComplete && !bHasBroadcastLevelCompleted)
+	{
+		bHasBroadcastLevelCompleted = true;
+		OnLevelCompleted.Broadcast(TargetBehavior);
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("Click: Proficiency=%d WasComplete=%d NowComplete=%d HasBroadcast=%d Success=%d"),
+		Proficiency, bWasLevelComplete, bLevelComplete, bHasBroadcastLevelCompleted, bWasSuccess);
+
+	return bWasSuccess;
+}
+
+void UDogTrainingComponent::AdvanceDogState(EDogState NewState)
+{
+	DogState = NewState;
+	RefreshTrainingWindow();
+}
+
+bool UDogTrainingComponent::IsInCorrectWindowForCue(ECueType Cue, EDogState State) const
+{
+	switch (Cue)
+	{
+	case ECueType::Come:
+		return false;
+	case ECueType::Sit:
+		return State == EDogState::Sitting;
+	case ECueType::Lay:
+		return State == EDogState::Laying;
+	case ECueType::None:
+	default:
+		return false;
+	}
+}
+
+void UDogTrainingComponent::RefreshTrainingWindow()
+{
+	bInCorrectWindow = IsInCorrectWindowForCue(CurrentCue, DogState);
 }
 

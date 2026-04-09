@@ -16,12 +16,15 @@ void UDogTrainingComponent::BeginPlay()
 	MisexecuteFrac = FMath::Clamp(MisexecuteFrac, 0.0f, 1.0f);
 	PLearnedDefault = FMath::Clamp(PLearnedDefault, 0.0f, 1.0f);
 	CueDuration = FMath::Max(0.0f, CueDuration);
+	ClickWindowDuration = FMath::Max(0.0f, ClickWindowDuration);
+	MaxCueToPoseDelay = FMath::Max(0.0f, MaxCueToPoseDelay);
 	MinHoldSitting = FMath::Max(MinHoldSitting, 0.0f);
 	MinHoldLaying = FMath::Max(MinHoldLaying, 0.0f);
 	MinTimeSitDown = FMath::Max(MinTimeSitDown, 0.0f);
 	MinTimeStandUp = FMath::Max(MinTimeStandUp, 0.0f);
 	MinTimeLayDown = FMath::Max(MinTimeLayDown, 0.0f);
 	MinTimeLayEnd = FMath::Max(MinTimeLayEnd, 0.0f);
+	AutoReturnToIdleSeconds = FMath::Max(AutoReturnToIdleSeconds, 0.0f);
 	IdleVariantCount = FMath::Max(IdleVariantCount, 1);
 	IdleVariantTriggerIntervalMin = FMath::Max(IdleVariantTriggerIntervalMin, 0.0f);
 	IdleVariantTriggerIntervalMax = FMath::Max(IdleVariantTriggerIntervalMax, IdleVariantTriggerIntervalMin);
@@ -45,6 +48,25 @@ void UDogTrainingComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 	IdleVariantTriggerTimeRemaining = FMath::Max(IdleVariantTriggerTimeRemaining - DeltaTime, 0.0f);
 	IdleVariantCooldownTimeRemaining = FMath::Max(IdleVariantCooldownTimeRemaining - DeltaTime, 0.0f);
 	TimeInState += DeltaTime;
+	TimeSinceLastCue += DeltaTime;
+
+	EDogState AutoReturnState = EDogState::Invalid;
+	if (ShouldAutoReturnToIdle(AutoReturnState) && !bHasBroadcastAutoReturnRequest)
+	{
+		bHasBroadcastAutoReturnRequest = true;
+		OnRequestDogState.Broadcast(AutoReturnState);
+	}
+
+	if (bClickWindowActive)
+	{
+		ClickWindowRemaining = FMath::Max(ClickWindowRemaining - DeltaTime, 0.0f);
+		if (ClickWindowRemaining <= 0.0f)
+		{
+			bClickWindowActive = false;
+			AchievedBehavior = ECueType::None;
+			RefreshTrainingWindow();
+		}
+	}
 
 	if (CurrentCue == ECueType::None || CueTimeRemaining <= 0.0f)
 	{
@@ -56,43 +78,96 @@ void UDogTrainingComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 	if (CueTimeRemaining <= 0.0f)
 	{
 		CueTimeRemaining = 0.0f;
-		CurrentCue = ECueType::None;
+		this->CurrentCue = ECueType::None;
 		bShouldAttempt = false;
 		RefreshTrainingWindow();
-		OnCueChanged.Broadcast(CurrentCue);
+		OnCueChanged.Broadcast(this->CurrentCue);
+		UE_LOG(LogTemp, Warning, TEXT("[CueExpired] this=%p id=%s Cue=%s Target=%s LastCue=%s Achieved=%s State=%s InWindow=%d CueTimeRemaining=%.2f ClickWindowRemaining=%.2f TimeSinceLastCue=%.2f TimeInState=%.2f"),
+			this,
+			*GetDebugInstanceId(),
+			*UEnum::GetValueAsString(this->CurrentCue),
+			*UEnum::GetValueAsString(this->TargetBehavior),
+			*UEnum::GetValueAsString(this->LastIssuedCue),
+			*UEnum::GetValueAsString(this->AchievedBehavior),
+			*UEnum::GetValueAsString(this->CurrentDogState),
+			this->bInCorrectWindow ? 1 : 0,
+			this->CueTimeRemaining,
+			this->ClickWindowRemaining,
+			this->TimeSinceLastCue,
+			this->TimeInState
+		);
 	}
 }
 
 void UDogTrainingComponent::StartLevel(ECueType NewTarget)
 {
-	TargetBehavior = NewTarget;
-	Proficiency = 0;
-	bLevelComplete = false;
-	bInCorrectWindow = false;
-	bLastClickWasTraining = false;
+	this->TargetBehavior = NewTarget;
+	this->Proficiency = 0;
+	this->bLevelComplete = false;
+	this->bLastClickWasTraining = false;
 	bHasBroadcastLevelCompleted = false;
 	bShouldAttempt = false;
-	CurrentCue = ECueType::None;
+	this->LastIssuedCue = ECueType::None;
+	this->TimeSinceLastCue = 999.0f;
+	this->bClickWindowActive = false;
+	this->ClickWindowRemaining = 0.0f;
+	this->AchievedBehavior = ECueType::None;
+	this->CurrentCue = ECueType::None;
 	CueTimeRemaining = 0.0f;
-	CurrentDogState = EDogState::Idle;
-	DogState = EDogState::Idle;
-	TimeInState = 0.0f;
-	PendingTargetState = EDogState::Invalid;
+	this->CurrentDogState = EDogState::Idle;
+	this->DogState = EDogState::Idle;
+	this->TimeInState = 0.0f;
+	bHasBroadcastAutoReturnRequest = false;
+	this->PendingTargetState = EDogState::Invalid;
 	IdleVariantCooldownTimeRemaining = 0.0f;
 	ResetIdleVariantTriggerTimer();
+	this->bInCorrectWindow = false;
 	RefreshTrainingWindow();
-	OnCueChanged.Broadcast(CurrentCue);
+	OnCueChanged.Broadcast(this->CurrentCue);
+	UE_LOG(LogTemp, Warning, TEXT("[StartLevel] this=%p id=%s Target=%s Cue=%s LastCue=%s Achieved=%s State=%s InWindow=%d CueTimeRemaining=%.2f ClickWindowRemaining=%.2f TimeSinceLastCue=%.2f TimeInState=%.2f"),
+		this,
+		*GetDebugInstanceId(),
+		*UEnum::GetValueAsString(this->TargetBehavior),
+		*UEnum::GetValueAsString(this->CurrentCue),
+		*UEnum::GetValueAsString(this->LastIssuedCue),
+		*UEnum::GetValueAsString(this->AchievedBehavior),
+		*UEnum::GetValueAsString(this->CurrentDogState),
+		this->bInCorrectWindow ? 1 : 0,
+		this->CueTimeRemaining,
+		this->ClickWindowRemaining,
+		this->TimeSinceLastCue,
+		this->TimeInState
+	);
 }
 
 void UDogTrainingComponent::SetCue(ECueType NewCue)
 {
-	CurrentCue = NewCue;
-	CueTimeRemaining = CueDuration;
-	bShouldAttempt = CurrentCue != ECueType::None;
-	PCorrect = GetCueExecutionProbabilityValue(CurrentCue);
+	this->CurrentCue = NewCue;
+	this->CueTimeRemaining = this->CurrentCue == ECueType::None ? 0.0f : this->CueDuration;
+	if (NewCue != ECueType::None)
+	{
+		this->LastIssuedCue = NewCue;
+		this->TimeSinceLastCue = 0.0f;
+	}
+	bShouldAttempt = this->CurrentCue != ECueType::None;
+	PCorrect = GetCueExecutionProbabilityValue(this->CurrentCue);
 	PMisexecute = (1.0f - PCorrect) * MisexecuteFrac;
 	RefreshTrainingWindow();
-	OnCueChanged.Broadcast(CurrentCue);
+	OnCueChanged.Broadcast(this->CurrentCue);
+	UE_LOG(LogTemp, Warning, TEXT("[SetCue] this=%p id=%s Cue=%s Target=%s LastCue=%s Achieved=%s State=%s InWindow=%d CueTimeRemaining=%.2f ClickWindowRemaining=%.2f TimeSinceLastCue=%.2f TimeInState=%.2f"),
+		this,
+		*GetDebugInstanceId(),
+		*UEnum::GetValueAsString(this->CurrentCue),
+		*UEnum::GetValueAsString(this->TargetBehavior),
+		*UEnum::GetValueAsString(this->LastIssuedCue),
+		*UEnum::GetValueAsString(this->AchievedBehavior),
+		*UEnum::GetValueAsString(this->CurrentDogState),
+		this->bInCorrectWindow ? 1 : 0,
+		this->CueTimeRemaining,
+		this->ClickWindowRemaining,
+		this->TimeSinceLastCue,
+		this->TimeInState
+	);
 }
 
 EDogState UDogTrainingComponent::SampleNextDogState()
@@ -105,29 +180,61 @@ bool UDogTrainingComponent::OnClickerPressed()
 {
 	RefreshTrainingWindow();
 
-	const bool bWasLevelComplete = bLevelComplete;
-	bLastClickWasTraining = CurrentCue == TargetBehavior;
+	UE_LOG(LogTemp, Warning, TEXT("[Click] this=%p id=%s Cue=%s Target=%s LastCue=%s Achieved=%s State=%s InWindow=%d CueTimeRemaining=%.2f ClickWindowRemaining=%.2f TimeSinceLastCue=%.2f TimeInState=%.2f Proficiency=%d"),
+		this,
+		*GetDebugInstanceId(),
+		*UEnum::GetValueAsString(this->CurrentCue),
+		*UEnum::GetValueAsString(this->TargetBehavior),
+		*UEnum::GetValueAsString(this->LastIssuedCue),
+		*UEnum::GetValueAsString(this->AchievedBehavior),
+		*UEnum::GetValueAsString(this->CurrentDogState),
+		this->bInCorrectWindow ? 1 : 0,
+		this->CueTimeRemaining,
+		this->ClickWindowRemaining,
+		this->TimeSinceLastCue,
+		this->TimeInState,
+		this->Proficiency
+	);
 
-	const bool bWasSuccess = CurrentCue != ECueType::None && bInCorrectWindow;
+	const bool bWasLevelComplete = this->bLevelComplete;
+	const bool bWasSuccess = this->bClickWindowActive && this->AchievedBehavior == this->TargetBehavior;
+	this->bLastClickWasTraining = bWasSuccess;
 
-	if (bWasSuccess && bLastClickWasTraining)
+	if (bWasSuccess)
 	{
 		if (float* LearningProbability = GetLearningProbabilityPtr())
 		{
 			*LearningProbability = FMath::Clamp(*LearningProbability + AlphaSuccess, 0.0f, MaxP);
 		}
 
-		Proficiency = FMath::Min(Proficiency + 20, 100);
+		this->Proficiency = FMath::Min(this->Proficiency + 20, 100);
 	}
 
-	bLevelComplete = Proficiency >= 100;
+	this->bLevelComplete = this->Proficiency >= 100;
 	OnTrainingResult.Broadcast(bWasSuccess);
 
-	if (!bWasLevelComplete && bLevelComplete && !bHasBroadcastLevelCompleted)
+	if (!bWasLevelComplete && this->bLevelComplete && !bHasBroadcastLevelCompleted)
 	{
 		bHasBroadcastLevelCompleted = true;
-		OnLevelCompleted.Broadcast(TargetBehavior);
+		OnLevelCompleted.Broadcast(this->TargetBehavior);
 	}
+
+	UE_LOG(LogTemp, Warning, TEXT("[ClickResult] this=%p id=%s success=%d Cue=%s Target=%s LastCue=%s Achieved=%s State=%s InWindow=%d CueTimeRemaining=%.2f ClickWindowRemaining=%.2f TimeSinceLastCue=%.2f TimeInState=%.2f Proficiency=%d"),
+		this,
+		*GetDebugInstanceId(),
+		bWasSuccess ? 1 : 0,
+		*UEnum::GetValueAsString(this->CurrentCue),
+		*UEnum::GetValueAsString(this->TargetBehavior),
+		*UEnum::GetValueAsString(this->LastIssuedCue),
+		*UEnum::GetValueAsString(this->AchievedBehavior),
+		*UEnum::GetValueAsString(this->CurrentDogState),
+		this->bInCorrectWindow ? 1 : 0,
+		this->CueTimeRemaining,
+		this->ClickWindowRemaining,
+		this->TimeSinceLastCue,
+		this->TimeInState,
+		this->Proficiency
+	);
 
 	return bWasSuccess;
 }
@@ -137,7 +244,60 @@ void UDogTrainingComponent::AdvanceDogState(EDogState NewState)
 	CurrentDogState = NewState;
 	DogState = NewState;
 	TimeInState = 0.0f;
+	bHasBroadcastAutoReturnRequest = false;
+
+	if (NewState == EDogState::Sitting)
+	{
+		CueTimeRemaining = ClickWindowDuration;
+		if (LastIssuedCue == ECueType::Sit && TimeSinceLastCue <= MaxCueToPoseDelay)
+		{
+			bClickWindowActive = true;
+			ClickWindowRemaining = ClickWindowDuration;
+			AchievedBehavior = ECueType::Sit;
+		}
+		else
+		{
+			bClickWindowActive = false;
+			ClickWindowRemaining = 0.0f;
+			AchievedBehavior = ECueType::None;
+		}
+	}
+	else if (NewState == EDogState::Laying)
+	{
+		CueTimeRemaining = ClickWindowDuration;
+		if (LastIssuedCue == ECueType::Lay && TimeSinceLastCue <= MaxCueToPoseDelay)
+		{
+			bClickWindowActive = true;
+			ClickWindowRemaining = ClickWindowDuration;
+			AchievedBehavior = ECueType::Lay;
+		}
+		else
+		{
+			bClickWindowActive = false;
+			ClickWindowRemaining = 0.0f;
+			AchievedBehavior = ECueType::None;
+		}
+	}
+	else
+	{
+		bClickWindowActive = false;
+		ClickWindowRemaining = 0.0f;
+		AchievedBehavior = ECueType::None;
+	}
+
 	RefreshTrainingWindow();
+	UE_LOG(LogTemp, Warning, TEXT("[AdvanceDogState] this=%p id=%s NewState=%s Cue=%s LastCue=%s Achieved=%s WindowActive=%d CueTimeRemaining=%.2f ClickWindowRemaining=%.2f TimeSinceLastCue=%.2f"),
+		this,
+		*GetDebugInstanceId(),
+		*UEnum::GetValueAsString(this->CurrentDogState),
+		*UEnum::GetValueAsString(this->CurrentCue),
+		*UEnum::GetValueAsString(this->LastIssuedCue),
+		*UEnum::GetValueAsString(this->AchievedBehavior),
+		this->bClickWindowActive ? 1 : 0,
+		this->CueTimeRemaining,
+		this->ClickWindowRemaining,
+		this->TimeSinceLastCue
+	);
 }
 
 float UDogTrainingComponent::GetProficiencyNormalized() const
@@ -148,6 +308,48 @@ float UDogTrainingComponent::GetProficiencyNormalized() const
 float UDogTrainingComponent::GetLearningProbability() const
 {
 	return GetLearningProbabilityValue();
+}
+
+FString UDogTrainingComponent::GetDebugInstanceId() const
+{
+	return FString::Printf(TEXT("%s@%p"), *GetName(), this);
+}
+
+bool UDogTrainingComponent::IsTransitionState(EDogState State) const
+{
+	return State == EDogState::SitDown
+		|| State == EDogState::LayDown
+		|| State == EDogState::StandUp
+		|| State == EDogState::LayEnd;
+}
+
+bool UDogTrainingComponent::IsTransitionLocked() const
+{
+	return IsTransitionState(CurrentDogState);
+}
+
+bool UDogTrainingComponent::ShouldAutoReturnToIdle(EDogState& OutReturnState) const
+{
+	OutReturnState = EDogState::Invalid;
+
+	if (TimeInState < AutoReturnToIdleSeconds)
+	{
+		return false;
+	}
+
+	if (CurrentDogState == EDogState::Sitting)
+	{
+		OutReturnState = EDogState::StandUp;
+		return true;
+	}
+
+	if (CurrentDogState == EDogState::Laying)
+	{
+		OutReturnState = EDogState::LayEnd;
+		return true;
+	}
+
+	return false;
 }
 
 bool UDogTrainingComponent::ShouldTriggerIdleVariant()
@@ -270,6 +472,13 @@ EDogState UDogTrainingComponent::GetDesiredStateFromCue() const
 
 EDogState UDogTrainingComponent::ResolveNextStateFromDesired(EDogState DesiredState)
 {
+	if (CurrentCue == ECueType::None)
+	{
+		PendingTargetState = EDogState::Invalid;
+		bShouldAttempt = false;
+		return CurrentDogState;
+	}
+
 	bShouldAttempt = CurrentCue != ECueType::None;
 	PCorrect = GetCueExecutionProbabilityValue(CurrentCue);
 	PMisexecute = (1.0f - PCorrect) * MisexecuteFrac;
@@ -375,6 +584,11 @@ void UDogTrainingComponent::ResetIdleVariantTriggerTimer()
 
 bool UDogTrainingComponent::IsInCorrectWindowForCue(ECueType Cue, EDogState State) const
 {
+	return IsCorrectPoseFor(Cue, State);
+}
+
+bool UDogTrainingComponent::IsCorrectPoseFor(ECueType Cue, EDogState State) const
+{
 	switch (Cue)
 	{
 	case ECueType::Come:
@@ -391,6 +605,6 @@ bool UDogTrainingComponent::IsInCorrectWindowForCue(ECueType Cue, EDogState Stat
 
 void UDogTrainingComponent::RefreshTrainingWindow()
 {
-	bInCorrectWindow = IsInCorrectWindowForCue(CurrentCue, CurrentDogState);
+	bInCorrectWindow = bClickWindowActive && AchievedBehavior == TargetBehavior;
 }
 

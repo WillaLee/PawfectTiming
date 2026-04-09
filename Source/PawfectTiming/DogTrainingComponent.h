@@ -29,6 +29,7 @@ enum class ECueType : uint8
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnTrainingResult, bool, bSuccess);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnTrainingLevelCompleted, ECueType, CompletedStage);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnCueChanged, ECueType, NewCue);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnRequestDogState, EDogState, NewState);
 
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class PAWFECTTIMING_API UDogTrainingComponent : public UActorComponent
@@ -90,7 +91,28 @@ public:
 	float IdleVariantCooldown = 3.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue", meta = (ClampMin = "0.0", UIMin = "0.0"))
-	float CueDuration = 1.5f;
+	float CueDuration = 4.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue", meta = (ClampMin = "0.0", UIMin = "0.0"))
+	float ClickWindowDuration = 1.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue", meta = (ClampMin = "0.0", UIMin = "0.0"))
+	float MaxCueToPoseDelay = 3.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cue")
+	ECueType LastIssuedCue = ECueType::None;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cue")
+	float TimeSinceLastCue = 999.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cue")
+	bool bClickWindowActive = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cue")
+	float ClickWindowRemaining = 0.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cue")
+	ECueType AchievedBehavior = ECueType::None;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Learning", meta = (ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "1.0"))
 	float PSit = 0.2f;
@@ -137,6 +159,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "State Timing", meta = (ClampMin = "0.0", UIMin = "0.0"))
 	float MinTimeLayEnd = 0.7f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "State Timing", meta = (ClampMin = "0.0", UIMin = "0.0"))
+	float AutoReturnToIdleSeconds = 2.0f;
+
 	UPROPERTY(BlueprintAssignable, Category = "Training")
 	FOnTrainingResult OnTrainingResult;
 
@@ -145,6 +170,9 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category = "Cue")
 	FOnCueChanged OnCueChanged;
+
+	UPROPERTY(BlueprintAssignable, Category = "Training")
+	FOnRequestDogState OnRequestDogState;
 
 	UFUNCTION(BlueprintCallable, Category = "Training")
 	void StartLevel(ECueType NewTarget);
@@ -167,6 +195,18 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Training")
 	float GetLearningProbability() const;
 
+	UFUNCTION(BlueprintPure, Category = "Debug")
+	FString GetDebugInstanceId() const;
+
+	UFUNCTION(BlueprintPure, Category = "Training")
+	bool IsTransitionState(EDogState State) const;
+
+	UFUNCTION(BlueprintPure, Category = "Training")
+	bool IsTransitionLocked() const;
+
+	UFUNCTION(BlueprintPure, Category = "Training")
+	bool ShouldAutoReturnToIdle(EDogState& OutReturnState) const;
+
 	UFUNCTION(BlueprintCallable, Category = "Idle Variant")
 	bool ShouldTriggerIdleVariant();
 
@@ -183,11 +223,13 @@ private:
 	float CueTimeRemaining = 0.0f;
 	float IdleVariantTriggerTimeRemaining = 0.0f;
 	float IdleVariantCooldownTimeRemaining = 0.0f;
+	bool bHasBroadcastAutoReturnRequest = false;
 	float* GetLearningProbabilityPtr();
 	float GetLearningProbabilityValue() const;
 	float GetCueExecutionProbabilityValue(ECueType Cue) const;
 	EDogState GetDesiredStateFromCue() const;
 	EDogState ResolveNextStateFromDesired(EDogState DesiredState);
+	bool IsCorrectPoseFor(ECueType Cue, EDogState State) const;
 	bool IsInCorrectWindowForCue(ECueType Cue, EDogState State) const;
 	void ResetIdleVariantTriggerTimer();
 	void RefreshTrainingWindow();
